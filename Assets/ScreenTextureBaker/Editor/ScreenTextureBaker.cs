@@ -1,6 +1,8 @@
 ﻿using UnityEditor;
 using UnityEngine;
+using Unity.Collections;
 using System.IO;
+using Unity.Jobs;
 
 public class ScreenTextureBaker : EditorWindow
 {
@@ -13,7 +15,7 @@ public class ScreenTextureBaker : EditorWindow
 
     private int bakingTextureSize = 1024;
     private int screenTextureSize = 1024;
-    private int spp = 1;
+    private int samples = 1;
 
     private Color32 blankPixelColor = new Color32(255, 255, 255, 0);
 
@@ -27,7 +29,7 @@ public class ScreenTextureBaker : EditorWindow
     {
         bakingTextureSize = (int)EditorGUILayout.IntField("Baking Texture Size", bakingTextureSize);
         screenTextureSize = EditorGUILayout.IntField("Screen Texture Size", screenTextureSize);
-        spp = EditorGUILayout.IntSlider("Samples Per Pixel", spp, 1, 10);
+        samples = EditorGUILayout.IntSlider("Samples Per Pixel", samples, 1, 10);
 
         if (GUILayout.Button("Bake Screen to Texture"))
         {
@@ -62,27 +64,49 @@ public class ScreenTextureBaker : EditorWindow
 
         Color[] currentPassPixels = bakingTexturePixels;
 
-        for (int i = 0; i < spp; i++)
+        for (int i = 0; i < samples; i++)
         {
-            for (int x = 0; x < screenTexture.width; x++)
+            var results = new NativeArray<RaycastHit>(screenTexture.height * screenTexture.width, Allocator.TempJob);
+            var commands = new NativeArray<RaycastCommand>(screenTexture.height * screenTexture.width, Allocator.TempJob);
+
+            for (int y = 0; y < screenTexture.height; y++)
             {
-                float progressBarAmount = x / (float)screenTexture.width;
+                float progressBarAmount = y / (float)screenTexture.height;
+                EditorUtility.DisplayCancelableProgressBar("Screen Texture Baker", "Progress: " + (i + 1) + " / " + samples + " Sample(s)", progressBarAmount);
 
-                EditorUtility.DisplayProgressBar("Screen Texture Baker", "Progress: " + (i + 1) + " / " + spp + " SPP", progressBarAmount);
+                if (EditorUtility.DisplayCancelableProgressBar("Screen Texture Baker", "Progress: " + (i + 1) + " / " + samples + " Sample(s)", progressBarAmount))
+                {
+                    EditorUtility.ClearProgressBar();
+                    results.Dispose();
+                    commands.Dispose();
 
-                for (int y = 0; y < screenTexture.height; y++)
+                    Debug.Log("Screen Texture Baker: Bake canceled by the user.");
+
+                    return;
+                }
+
+                for (int x = 0; x < screenTexture.width; x++)
                 {
                     Ray ray = camera.ScreenPointToRay(new Vector3(x + Random.value, y + Random.value, 0));
-                    RaycastHit hit;
+                    commands[screenTexture.width * y + x] = new RaycastCommand(ray.origin, ray.direction, 90);
+                }
+            }
 
-                    if (Physics.Raycast(ray, out hit, 90f))
-                    {
-                        Vector2 pixelUV = hit.textureCoord;
-                        pixelUV.x *= bakingTextureSize;
-                        pixelUV.y *= bakingTextureSize;
+            JobHandle handle = RaycastCommand.ScheduleBatch(commands, results, 1, default(JobHandle));
 
-                        currentPassPixels[bakingTexture.width * (int)pixelUV.y + (int)pixelUV.x] = screenTexturePixels[screenTexture.width * y + x];
-                    }
+            handle.Complete();
+
+            for (int j = 0; j < results.Length; j++)
+            {
+                RaycastHit batchedHit = results[j];
+
+                if (batchedHit.collider != null)
+                {
+                    Vector2 pixelUV = batchedHit.textureCoord;
+                    pixelUV.x *= bakingTextureSize;
+                    pixelUV.y *= bakingTextureSize;
+
+                    currentPassPixels[bakingTexture.width * (int)pixelUV.y + (int)pixelUV.x] = screenTexturePixels[j];
                 }
             }
 
@@ -90,6 +114,9 @@ public class ScreenTextureBaker : EditorWindow
             {
                 bakingTexturePixels[n] = (bakingTexturePixels[n].a <= 0) ? currentPassPixels[n] : Color.Lerp(bakingTexturePixels[n], currentPassPixels[n], 1.0f / (i + 1.0f));
             }
+
+            results.Dispose();
+            commands.Dispose();
         }
 
         bakingTexture.SetPixels(bakingTexturePixels);
@@ -103,5 +130,7 @@ public class ScreenTextureBaker : EditorWindow
         AssetDatabase.Refresh();
 
         EditorUtility.ClearProgressBar();
+
+        Debug.Log("Screen Texture Baker: Bake Complete.");
     }
 }
