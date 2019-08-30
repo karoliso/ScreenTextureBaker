@@ -16,6 +16,8 @@ public class ScreenTextureBaker : EditorWindow
     private int bakingTextureSize = 1024;
     private int screenTextureSize = 1024;
     private int samples = 1;
+    private const string bakingTextureDefaultName = "ScreenTextureBaker_OutputImage";
+    private string bakingTextureName = bakingTextureDefaultName;
 
     private Color32 blankPixelColor = new Color32(255, 255, 255, 0);
 
@@ -27,6 +29,7 @@ public class ScreenTextureBaker : EditorWindow
 
     void OnGUI()
     {
+        bakingTextureName = (string)EditorGUILayout.TextField("Baking Texture Name", bakingTextureName);
         bakingTextureSize = (int)EditorGUILayout.IntField("Baking Texture Size", bakingTextureSize);
         screenTextureSize = EditorGUILayout.IntField("Screen Texture Size", screenTextureSize);
         samples = EditorGUILayout.IntSlider("Samples Per Pixel", samples, 1, 10);
@@ -69,22 +72,19 @@ public class ScreenTextureBaker : EditorWindow
             var results = new NativeArray<RaycastHit>(screenTexture.height * screenTexture.width, Allocator.TempJob);
             var commands = new NativeArray<RaycastCommand>(screenTexture.height * screenTexture.width, Allocator.TempJob);
 
+            if (EditorUtility.DisplayCancelableProgressBar("Screen Texture Baker", "Progress: " + (i + 1) + " / " + samples + " Sample(s)", (i + 1) / (float)samples))
+            {
+                EditorUtility.ClearProgressBar();
+                results.Dispose();
+                commands.Dispose();
+
+                Debug.Log("Screen Texture Baker: Bake canceled by the user.");
+
+                return;
+            }
+
             for (int y = 0; y < screenTexture.height; y++)
             {
-                float progressBarAmount = y / (float)screenTexture.height;
-                EditorUtility.DisplayCancelableProgressBar("Screen Texture Baker", "Progress: " + (i + 1) + " / " + samples + " Sample(s)", progressBarAmount);
-
-                if (EditorUtility.DisplayCancelableProgressBar("Screen Texture Baker", "Progress: " + (i + 1) + " / " + samples + " Sample(s)", progressBarAmount))
-                {
-                    EditorUtility.ClearProgressBar();
-                    results.Dispose();
-                    commands.Dispose();
-
-                    Debug.Log("Screen Texture Baker: Bake canceled by the user.");
-
-                    return;
-                }
-
                 for (int x = 0; x < screenTexture.width; x++)
                 {
                     Ray ray = camera.ScreenPointToRay(new Vector3(x + Random.value, y + Random.value, 0));
@@ -123,7 +123,13 @@ public class ScreenTextureBaker : EditorWindow
         bakingTexture.Apply();
 
         byte[] bytes = bakingTexture.EncodeToPNG();
-        File.WriteAllBytes(Application.dataPath + "/ScreenTextureBaker_OutputImage.png", bytes);
+
+        if (bakingTextureName == "")
+        {
+            bakingTextureName = bakingTextureDefaultName;
+        }
+
+        File.WriteAllBytes(Application.dataPath + "/" + bakingTextureName + ".png", bytes);
 
         camera.targetTexture = null;
 
